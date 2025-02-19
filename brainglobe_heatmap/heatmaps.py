@@ -248,6 +248,7 @@ class Heatmap:
         atlas_name: Optional[str] = None,
         label_regions: Optional[bool] = False,
         annotate_regions: Optional[Union[bool, List[str], Dict]] = False,
+        annotate_less_clutter=False,
         annotate_text_options: Optional[Dict] = None,
         check_latest: bool = True,
         **kwargs,
@@ -300,6 +301,11 @@ class Heatmap:
             If a list, annotates only the specified regions.
             If a dict, uses custom text/values for annotations.
             Default is False.
+        annotate_less_clutter :
+            bool
+            If True, annotate only one segment per brain region
+                typically the largest segment—to reduce clutter.
+            If False, annotate every segment with its region name.
         annotate_text_options : dict, optional
             Options for customizing region annotations text.
             Default is None
@@ -316,6 +322,7 @@ class Heatmap:
         self.cmap = cmap
         self.label_regions = label_regions
         self.annotate_regions = annotate_regions
+        self.annotate_less_clutter = annotate_less_clutter
         self.annotate_text_options = annotate_text_options
 
         # create a scene
@@ -489,8 +496,11 @@ class Heatmap:
 
         if filename is not None:
             plt.savefig(filename, dpi=300)
-
-        plt.show()
+            # todo: check
+            plt.close(f)
+        else:
+            plt.show()
+            plt.close(f)
         return f
 
     def plot_subplot(
@@ -568,7 +578,8 @@ class Heatmap:
 
         # Sort region segments by area (largest first)
         segments.sort(key=lambda s: s["area"], reverse=True)
-
+        # for annotate_less_clutter
+        track_segment_ocurr = {"root"}
         for segment in segments:
             name = segment["name"]
             segment_nr = segment["segment_nr"]
@@ -584,7 +595,7 @@ class Heatmap:
                 alpha=0.3 if name == "root" else None,
             )
 
-            should_annotate = name != "root" and (
+            should_annotate = (
                 (
                     isinstance(self.annotate_regions, bool)
                     and self.annotate_regions
@@ -597,9 +608,10 @@ class Heatmap:
                     isinstance(self.annotate_regions, dict)
                     and name in self.annotate_regions.keys()
                 )
-            )
+            ) and name not in track_segment_ocurr
 
             if should_annotate:
+                track_segment_ocurr.add(name)
                 display_text = (
                     str(self.annotate_regions[name])
                     if isinstance(self.annotate_regions, dict)

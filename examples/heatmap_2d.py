@@ -39,6 +39,7 @@ annotate_text_options = dict(
     color="black",
     alpha=1,  # float in range 0-1
 )
+annotate_less_clutter = True
 
 f = bgh.Heatmap(
     values,
@@ -50,6 +51,7 @@ f = bgh.Heatmap(
     vmin=-5,
     vmax=3,
     format="2D",
-    annotate_regions=False,
+    annotate_regions=True,
+    annotate_less_clutter=True,
     annotate_text_options=annotate_text_options,
-).show()
+).show(filename="name")
