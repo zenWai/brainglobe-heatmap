@@ -579,7 +579,7 @@ class Heatmap:
         # Sort region segments by area (largest first)
         segments.sort(key=lambda s: s["area"], reverse=True)
         # for annotate_less_clutter
-        track_segment_ocurr = {"root"}
+        track_segment_ocurr = set()
         for segment in segments:
             name = segment["name"]
             segment_nr = segment["segment_nr"]
@@ -597,18 +597,26 @@ class Heatmap:
 
             should_annotate = (
                 (
-                    isinstance(self.annotate_regions, bool)
-                    and self.annotate_regions
+                    (
+                        isinstance(self.annotate_regions, bool)
+                        and self.annotate_regions
+                    )
+                    or (
+                        isinstance(self.annotate_regions, list)
+                        and name in self.annotate_regions
+                    )
+                    or (
+                        isinstance(self.annotate_regions, dict)
+                        and name in self.annotate_regions.keys()
+                    )
                 )
-                or (
-                    isinstance(self.annotate_regions, list)
-                    and name in self.annotate_regions
+                and name != "root"
+                and (
+                    name not in track_segment_ocurr
+                    if self.annotate_less_clutter
+                    else True
                 )
-                or (
-                    isinstance(self.annotate_regions, dict)
-                    and name in self.annotate_regions.keys()
-                )
-            ) and name not in track_segment_ocurr
+            )
 
             if should_annotate:
                 track_segment_ocurr.add(name)
