@@ -1,5 +1,5 @@
 from heapq import heappop, heappush
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib as mpl
 import matplotlib.path as mpath
@@ -548,95 +548,76 @@ class Heatmap:
             self.regions_meshes, self.scene.root
         )
 
-        root_segments = []
-        region_areas: Dict[str, Dict[str, Any]] = {}
+        segments: List[Dict[str, Union[str, np.ndarray, float]]] = []
         for r, coords in projected.items():
-            name, segment = r.split("_segment_")
-            if name == "root":
-                root_segments.append((r, coords))
-                continue
-
+            name, segment_nr = r.split("_segment_")
             x = coords[:, 0]
             y = coords[:, 1]
             area = 0.5 * np.abs(
                 np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))
             )
 
-            if name in region_areas:
-                region_areas[name]["area"] += area
-                region_areas[name]["segments"].append((r, coords))
-            else:
-                region_areas[name] = {"area": area, "segments": [(r, coords)]}
+            segments.append(
+                {
+                    "name": name,
+                    "segment_nr": segment_nr,
+                    "coords": coords,
+                    "area": area,
+                }
+            )
 
-        # Sort regions by area (largest first)
-        sorted_regions_by_area = sorted(
-            region_areas.keys(),
-            key=lambda r: region_areas[r]["area"],
-            reverse=True,
-        )
+        # Sort region segments by area (largest first)
+        segments.sort(key=lambda s: s["area"], reverse=True)
 
-        # root
-        for r, coords in root_segments:
-            name, segment = r.split("_segment_")
+        for segment in segments:
+            name = segment["name"]
+            segment_nr = segment["segment_nr"]
+            coords = segment["coords"]
             ax.fill(
                 coords[:, 0],
                 coords[:, 1],
                 color=self.colors[name],
-                label=None,
+                label=name if segment_nr == "0" and name != "root" else None,
                 lw=1,
                 ec="k",
-                zorder=-1,
-                alpha=0.3,
+                zorder=-1 if name == "root" else None,
+                alpha=0.3 if name == "root" else None,
             )
 
-        # regions
-        for region_name in sorted_regions_by_area:
-            for r, coords in region_areas[region_name]["segments"]:
-                name, segment = r.split("_segment_")
-                ax.fill(
-                    coords[:, 0],
-                    coords[:, 1],
-                    color=self.colors[name],
-                    label=name if segment == "0" else None,
-                    lw=1,
-                    ec="k",
-                    zorder=None,
-                    alpha=None,
+            should_annotate = name != "root" and (
+                (
+                    isinstance(self.annotate_regions, bool)
+                    and self.annotate_regions
                 )
+                or (
+                    isinstance(self.annotate_regions, list)
+                    and name in self.annotate_regions
+                )
+                or (
+                    isinstance(self.annotate_regions, dict)
+                    and name in self.annotate_regions.keys()
+                )
+            )
 
-                should_annotate = (
-                    (
-                        isinstance(self.annotate_regions, bool)
-                        and self.annotate_regions
-                    )
-                    or (
-                        isinstance(self.annotate_regions, list)
-                        and name in self.annotate_regions
-                    )
-                    or (
-                        isinstance(self.annotate_regions, dict)
-                        and name in self.annotate_regions.keys()
-                    )
+            if should_annotate:
+                display_text = (
+                    str(self.annotate_regions[name])
+                    if isinstance(self.annotate_regions, dict)
+                    else name
                 )
-                if should_annotate and self.format == "2D":
-                    display_text = (
-                        str(self.annotate_regions[name])
-                        if isinstance(self.annotate_regions, dict)
-                        else name
-                    )
-                    ax.annotate(
-                        display_text,
-                        xy=find_annotation_position_inside_polygon(
-                            coords, precision=0.1
-                        ),
-                        ha="center",
-                        va="center",
-                        **(
-                            self.annotate_text_options
-                            if self.annotate_text_options is not None
-                            else {}
-                        ),
-                    )
+                ax.annotate(
+                    display_text,
+                    xy=find_annotation_position_inside_polygon(
+                        coords, precision=0.1
+                    ),
+                    ha="center",
+                    va="center",
+                    **(
+                        self.annotate_text_options
+                        if self.annotate_text_options is not None
+                        else {}
+                    ),
+                )
 
         if show_cbar:
             # make colorbar
