@@ -382,7 +382,7 @@ class Heatmap:
             view = self.plot(**kwargs)
         return view
 
-    def render(self, camera=None) -> Scene:
+    def render(self, camera=None, **kwargs) -> Scene:
         """
         Renders the heatmap visualization as a 3D scene in brainrender.
 
@@ -423,7 +423,8 @@ class Heatmap:
                     "viewup": (0, -1, 0),
                     "clipping_range": (19531, 40903),
                 }
-
+        if kwargs.get("export_html"):
+            self.scene.export(kwargs.get("export_html"))
         self.scene.render(
             camera=camera, interactive=self.interactive, zoom=self.zoom
         )

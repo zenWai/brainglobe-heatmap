@@ -22,14 +22,15 @@ values = dict(  # scalar values for each region
     PA=-4,
 )
 
-
+# TODO: position 0 and thickness 100000 to export to html
 scene = bgh.Heatmap(
     values,
-    position=(8000, 5000, 5000),
+    position=0,
     orientation="frontal",  # or 'sagittal', or 'horizontal' or a tuple (x,y,z)
-    thickness=1000,
+    thickness=10000,
     title="frontal",
     vmin=-5,
     vmax=3,
     format="3D",
-).show()
+)
+scene.show(export_html="myfile.html")
