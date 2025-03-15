@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib as mpl
@@ -93,6 +94,115 @@ def find_annotation_position_inside_polygon(
 
     label_position = polylabel(polygon, tolerance=0.1)
     return label_position.x, label_position.y
+
+
+# TODO: test colors
+def export_powerpoint_compatible_glb(self, path):
+    """
+    Export a PowerPoint-compatible GLB file using PyVista and Trimesh.
+    """
+    from vedo import Plotter
+
+    if path.suffix != ".glb":
+        path = path.with_suffix(".glb")
+
+    # Create a vedo Plotter and add the clean renderables
+    plt_obj = Plotter(interactive=False, offscreen=True)
+    plt_obj.add(self.scene.clean_renderables)
+    plt_obj = plt_obj.show(interactive=False)
+
+    # pyvista to process the meshes Trimesh to optimize
+    import pyvista as pv
+    import trimesh
+
+    all_vertices = []
+    all_faces = []
+    all_colors = []
+    vertex_offset = 0
+
+    for actor in plt_obj.get_actors():
+        if hasattr(actor, "GetProperty"):
+            prop = actor.GetProperty()
+            opacity = prop.GetOpacity()
+
+            # Skip actors that are not fully opaque
+            # OBS: brainrender root default opacity is < 1.0
+            if opacity < 1.0:
+                continue
+
+            if hasattr(actor, "GetMapper") and actor.GetMapper():
+                mapper = actor.GetMapper()
+
+                # Process the mesh data if available
+                if mapper.GetInput():
+                    # Convert VTK data to PyVista mesh
+                    pv_mesh = pv.wrap(mapper.GetInput())
+
+                    # Extract face and vertex data
+                    vertices = pv_mesh.points
+                    faces = []
+
+                    if hasattr(pv_mesh, "faces") and len(pv_mesh.faces) > 0:
+                        # PyVista faces are stored with their size
+                        # so a triangle is [3, v1, v2, v3]
+                        # We need to convert to just [v1, v2, v3]
+                        pv_faces = pv_mesh.faces.reshape(
+                            (-1, 4)
+                        )  # First value is number of points per face (3)
+                        for face in pv_faces:
+                            if face[0] == 3:
+                                faces.append([face[1], face[2], face[3]])
+
+                    # Only add to combined mesh if we have vertices and faces
+                    if len(vertices) > 0 and len(faces) > 0:
+                        # Get color for this mesh
+                        color = prop.GetColor()  # RGB in 0-1 range
+
+                        # Flip the model along y-axis
+                        flipped_vertices = vertices.copy()
+                        flipped_vertices[:, 1] = -flipped_vertices[:, 1]
+
+                        # Add vertices to the combined list
+                        all_vertices.append(flipped_vertices)
+
+                        # Adjust face indices to account for the offset
+                        offset_faces = np.array(faces) + vertex_offset
+                        all_faces.append(offset_faces)
+
+                        # Update vertex offset for the next mesh
+                        vertex_offset += len(flipped_vertices)
+
+                        # Add colors for all faces
+                        mesh_colors = np.tile(
+                            np.array([color[0], color[1], color[2], 1.0])
+                            * 255,
+                            (len(faces), 1),
+                        ).astype(np.uint8)
+                        all_colors.append(mesh_colors)
+
+    if all_vertices and all_faces:
+        # Combine all vertices and faces
+        combined_vertices = np.vstack(all_vertices)
+        combined_faces = np.vstack(all_faces)
+        combined_colors = np.vstack(all_colors)
+
+        # Create a single trimesh helps with powerpoint compatibility
+        combined_mesh = trimesh.Trimesh(
+            vertices=combined_vertices,
+            faces=combined_faces,
+            face_colors=combined_colors,
+        )
+
+        trimesh_scene = trimesh.Scene()
+        trimesh_scene.add_geometry(combined_mesh, geom_name="brain_combined")
+
+        # Export to GLB format
+        trimesh_scene.export(str(path), file_type="glb")
+
+        print(f"Successfully exported PowerPoint-compatible GLB to {path}")
+        return str(path)
+
+    return None
 
 
 class Heatmap:
@@ -436,8 +546,12 @@ class Heatmap:
         if kwargs.get("export_html"):
             self.scene.export(kwargs.get("export_html"))
         elif kwargs.get("export_glb"):
-            # implement
-            return self.scene
+            export_glb_path = kwargs.get("export_glb")
+            if export_glb_path is not None:
+                path = Path(export_glb_path)
+                # TODO exclude_root option
+                # exclude_root = kwargs.get("exclude_root", True)
+                export_powerpoint_compatible_glb(self, path)
         else:
             self.scene.render(
                 camera=camera, interactive=self.interactive, zoom=self.zoom
