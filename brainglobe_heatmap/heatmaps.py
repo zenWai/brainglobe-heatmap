@@ -225,7 +225,7 @@ class Heatmap:
         label_regions: Optional[bool] = False,
         annotate_regions: Optional[Union[bool, List[str], Dict]] = False,
         annotate_less_clutter=False,
-        annotate_text_options: Optional[Dict] = None,
+        annotate_text_options_2d: Optional[Dict] = None,
         check_latest: bool = True,
         tight_layout_2d: bool = False,
         **kwargs,
@@ -278,7 +278,7 @@ class Heatmap:
             If a list, annotates only the specified regions.
             If a dict, uses custom text/values for annotations.
             Default is False.
-        annotate_text_options : dict, optional
+        annotate_text_options_2d : dict, optional
             Options for customizing region annotations text in 2D format.
             matplotlib.text parameters
             Default is None
@@ -302,7 +302,7 @@ class Heatmap:
         self.label_regions = label_regions
         self.annotate_regions = annotate_regions
         self.annotate_less_clutter = annotate_less_clutter
-        self.annotate_text_options = annotate_text_options
+        self.annotate_text_options_2d = annotate_text_options_2d
         self.tight_layout_2d = tight_layout_2d
 
         # create a scene
@@ -392,7 +392,7 @@ class Heatmap:
 
         return region_name
 
-    def _get_optimal_label_position(self, mesh_intersection, mesh_center):
+    def get_optimal_label_position_3d(self, mesh_intersection, mesh_center):
         """Helper function to find the optimal label position."""
         # Split the intersection into connected pieces
         pieces = mesh_intersection.split()
@@ -477,8 +477,10 @@ class Heatmap:
             region_actor = region_actors[0]
             region_actor.color(color)
 
-            # TODO: think on annotate html and glb / implement slice
+            # TODO: think on annotate for html and glb
             if not kwargs.get("export_html") or not kwargs.get("export_glb"):
+                # Handles annotations for 3d
+
                 # Check if this region should be annotated
                 display_text = self.get_region_annotation_text(
                     region_actor.name
@@ -505,7 +507,7 @@ class Heatmap:
                 )
 
                 # Get optimal label position from largest valid piece
-                optimal_pos_3d = self._get_optimal_label_position(
+                optimal_pos_3d = self.get_optimal_label_position_3d(
                     mesh_intersection, mesh_center
                 )
 
@@ -738,8 +740,8 @@ class Heatmap:
                         ha="center",
                         va="center",
                         **(
-                            self.annotate_text_options
-                            if self.annotate_text_options is not None
+                            self.annotate_text_options_2d
+                            if self.annotate_text_options_2d is not None
                             else {}
                         ),
                     )
