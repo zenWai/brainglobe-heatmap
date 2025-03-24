@@ -273,19 +273,20 @@ class Heatmap:
             Default is False.
         annotate_regions :
             bool, List[str], Dict[str, Union[str, float, int]], optional
-            Controls region annotation in 2D format.
+            Controls region annotation in 2D and 3D format.
             If True, annotates all regions with their names.
             If a list, annotates only the specified regions.
             If a dict, uses custom text/values for annotations.
             Default is False.
+        annotate_text_options : dict, optional
+            Options for customizing region annotations text in 2D format.
+            matplotlib.text parameters
+            Default is None
         annotate_less_clutter :
             bool
             If True, annotate only one segment per brain region
                 typically the largest segment—to reduce clutter.
             If False, annotate every segment with its region name.
-        annotate_text_options : dict, optional
-            Options for customizing region annotations text.
-            Default is None
         check_latest : bool, optional
             Check for the latest version of the atlas. Default is True.
         """
@@ -462,7 +463,7 @@ class Heatmap:
             The rendered 3D scene.
         """
 
-        # Set brain regions colors and add annotations where needed
+        # set brain regions colors and annotations
         for region, color in self.colors.items():
             if region == "root":
                 continue
