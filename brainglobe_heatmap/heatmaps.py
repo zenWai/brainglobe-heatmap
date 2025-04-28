@@ -1,15 +1,18 @@
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from brainrender import Scene, cameras, settings
+from brainrender.actor import Actor
 from brainrender.atlas import Atlas
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from myterial import grey_darker
 from shapely import Polygon
 from shapely.algorithms.polylabel import polylabel
 from shapely.geometry.multipolygon import MultiPolygon
+from vedo import Point
 from vedo.colors import color_map as map_color
 
 from brainglobe_heatmap.slicer import Slicer
@@ -112,8 +115,10 @@ class Heatmap:
         atlas_name: Optional[str] = None,
         label_regions: Optional[bool] = False,
         annotate_regions: Optional[Union[bool, List[str], Dict]] = False,
+        annotate_less_clutter=False,
         annotate_text_options_2d: Optional[Dict] = None,
         check_latest: bool = True,
+        tight_layout_2d: bool = False,
         **kwargs,
     ):
         """
@@ -168,6 +173,11 @@ class Heatmap:
             Options for customizing region annotations text in 2D format.
             matplotlib.text parameters
             Default is None
+        annotate_less_clutter :
+            bool
+            If True, annotate only one segment per brain region
+                typically the largest segment—to reduce clutter.
+            If False, annotate every segment with its region name.
         check_latest : bool, optional
             Check for the latest version of the atlas. Default is True.
         """
@@ -175,13 +185,16 @@ class Heatmap:
         self.values = values
         self.format = format
         self.orientation = orientation
+        self.hemisphere = hemisphere
         self.interactive = interactive
         self.zoom = zoom
         self.title = title
         self.cmap = cmap
         self.label_regions = label_regions
         self.annotate_regions = annotate_regions
+        self.annotate_less_clutter = annotate_less_clutter
         self.annotate_text_options_2d = annotate_text_options_2d
+        self.tight_layout_2d = tight_layout_2d
 
         # create a scene
         self.scene = Scene(
@@ -270,6 +283,51 @@ class Heatmap:
 
         return region_name
 
+    def get_optimal_label_position_3d(self, mesh_intersection, mesh_center):
+        """Helper function to find the optimal label position."""
+        # Split the intersection into connected pieces
+        pieces = mesh_intersection.split()
+
+        # Sort pieces by size (largest first)
+        pieces = sorted(pieces, key=lambda p: len(p.vertices), reverse=True)
+
+        # Check each piece for a valid label position
+        for piece in pieces:
+            points_3d = piece.join(reset=True).vertices
+
+            # Skip if we don't have enough points for a polygon
+            if len(points_3d) < 4:
+                continue
+
+            # Project 3D points to 2D in the plane's coordinate system
+            points_2d = self.slicer.plane0.p3_to_p2(points_3d)
+
+            # Find the optimal position for the label
+            optimal_pos_2d = find_annotation_position_inside_polygon(points_2d)
+
+            if optimal_pos_2d is None:
+                continue
+
+            # Convert the 2D optimal position back to 3D
+            optimal_pos_3d = self.slicer.plane0.center + (
+                optimal_pos_2d[0] * self.slicer.plane0.u
+                + optimal_pos_2d[1] * self.slicer.plane0.v
+            )
+
+            # Check if position is in correct hemisphere
+            if not hasattr(self, "hemisphere") or self.hemisphere == "both":
+                return optimal_pos_3d
+            elif (
+                self.hemisphere == "left"
+                and optimal_pos_3d[2] > mesh_center[2]
+            ) or (
+                self.hemisphere == "right"
+                and optimal_pos_3d[2] < mesh_center[2]
+            ):
+                return optimal_pos_3d
+
+        return None
+
     def show(self, **kwargs) -> Union[Scene, plt.Figure]:
         """
         Creates a 2D plot or 3D rendering of the heatmap
@@ -281,7 +339,7 @@ class Heatmap:
             view = self.plot(**kwargs)
         return view
 
-    def render(self, camera=None) -> Scene:
+    def render(self, camera=None, **kwargs) -> Scene:
         """
         Renders the heatmap visualization as a 3D scene in brainrender.
 
@@ -300,21 +358,59 @@ class Heatmap:
         for region, color in self.colors.items():
             if region == "root":
                 continue
-            region_actor = self.scene.get_actors(
+
+            region_actors = self.scene.get_actors(
                 br_class="brain region", name=region
-            )[0]
+            )
+            if not region_actors:
+                continue
+
+            region_actor = region_actors[0]
             region_actor.color(color)
 
+            # Check if this region should be annotated
             display_text = self.get_region_annotation_text(region_actor.name)
+            if display_text is None:
+                continue
 
-            if (
-                len(region_actor._mesh.vertices) > 0
-                and display_text is not None
-            ):
-                self.scene.add_label(
-                    actor=region_actor,
-                    label=display_text,
-                )
+            # Get the region's intersection with the plane
+            mesh_intersection = self.slicer.plane0.intersect_with(
+                region_actor.mesh
+            )
+            if not mesh_intersection or len(mesh_intersection.vertices) < 4:
+                continue
+
+            # Get mesh center for hemisphere filtering
+            mesh_center = (
+                self.scene.root.mesh.bounds().reshape((3, 2)).mean(axis=1)
+                if hasattr(self.scene.atlas, "metadata")
+                and self.scene.atlas.metadata.get("symmetric")
+                else self.scene.root.mesh.center_of_mass()
+            )
+
+            # Get optimal label position from largest valid piece
+            optimal_pos_3d = self.get_optimal_label_position_3d(
+                mesh_intersection, mesh_center
+            )
+
+            if optimal_pos_3d is None:
+                continue
+
+            # Create and add the label
+            label_actor = Actor(
+                Point(optimal_pos_3d, r=0.01).alpha(0),
+                name=f"{region_actor.name}_label",
+                br_class="brain region annotation",
+                is_text=True,
+            )
+            self.scene.add(label_actor)
+            self.scene.add_label(
+                actor=label_actor,
+                label=display_text,
+                size=300,
+                radius=100,
+                yoffset=100,
+            )
 
         if camera is None:
             # set camera position and render
@@ -333,11 +429,147 @@ class Heatmap:
                     "viewup": (0, -1, 0),
                     "clipping_range": (19531, 40903),
                 }
+        if kwargs.get("export_html"):
+            self.scene.export(kwargs.get("export_html"))
+        elif kwargs.get("export_glb"):
+            export_glb_path = kwargs.get("export_glb")
+            if export_glb_path is not None:
+                path = Path(export_glb_path)
 
-        self.scene.render(
-            camera=camera, interactive=self.interactive, zoom=self.zoom
-        )
+                if path.suffix != ".glb":
+                    path = path.with_suffix(".glb")
+
+                self.scene.render(
+                    camera=camera, interactive=self.interactive, zoom=self.zoom
+                )
+                self.export_powerpoint_compatible_glb(path, **kwargs)
+        else:
+            self.scene.render(
+                camera=camera, interactive=self.interactive, zoom=self.zoom
+            )
         return self.scene
+
+    def export_powerpoint_compatible_glb(self, path, **kwargs):
+        """
+        Export the scene to GLB format optimized for PowerPoint
+        and custom webpage view.
+
+        Parameters
+        ----------
+        path : Path
+            Path to save the GLB file
+        **kwargs :
+            include_root : bool
+                Whether to include the root (brain outline) in the export.
+                Default is False.
+            + any other kwargs from the software
+
+        Returns
+        -------
+        str
+            Path to the exported file on success, None on failure
+        """
+        try:
+            import trimesh
+            from trimesh.visual.material import PBRMaterial
+
+            print("Starting GLB export process...")
+
+            # Make sure the scene is rendered
+            if not self.scene.is_rendered:
+                print("Rendering scene first...")
+                self.scene.render(interactive=False)
+
+            trimesh_scene = trimesh.Scene()
+
+            print(f"Processing {len(self.scene.clean_actors)} actors...")
+            for idx, actor in enumerate(self.scene.clean_actors):
+                actor_name = actor.name
+                print(f"Processing actor {idx}: {actor_name}")
+
+                # Skip root if not included
+                if actor_name == "root" and not kwargs.get(
+                    "include_root", False
+                ):
+                    print("  Skipping root actor")
+                    continue
+
+                vedo_mesh = actor._mesh
+
+                color = vedo_mesh.color()
+                vertices = vedo_mesh.vertices
+                cells = vedo_mesh.cells  # (faces)
+
+                # Skip meshes with no points or faces
+                if len(vertices) == 0 or len(cells) == 0:
+                    print("  Empty mesh, skipping")
+                    continue
+
+                print(
+                    f"  Mesh has {len(vertices)} points and {len(cells)} faces"
+                )
+
+                # Flip the model along y-axis and z-axis
+                # replicate brainrender and hemispheres
+                flipped_vertices = vertices.copy()
+                flipped_vertices[:, 1] = -flipped_vertices[:, 1]
+                flipped_vertices[:, 2] = -flipped_vertices[:, 2]
+
+                try:
+                    # Convert face list to numpy array for trimesh
+                    faces_array = np.array(cells)
+
+                    mesh = trimesh.Trimesh(
+                        vertices=flipped_vertices,
+                        faces=faces_array,
+                    )
+
+                    alphaMode = "OPAQUE" if actor_name != "root" else "BLEND"
+
+                    material = PBRMaterial(
+                        name=actor_name,
+                        baseColorFactor=[
+                            color[0],
+                            color[1],
+                            color[2],
+                            1.0 if actor_name != "root" else 0.1,
+                        ],
+                        alphaMode=alphaMode,
+                        alphaCutoff=None,
+                        doubleSided=True,
+                        roughnessFactor=None,
+                        metallicFactor=None,
+                    )
+
+                    mesh.visual.material = material
+                    trimesh_scene.add_geometry(mesh, geom_name=actor_name)
+                    print(f"  Added mesh to scene as '{actor_name}'")
+                except Exception as e:
+                    print(f"  Error creating trimesh: {e}")
+                    continue
+
+            # Check if any meshes were added to the scene
+            print(
+                "Created trimesh scene with "
+                f"{len(trimesh_scene.geometry)} geometries"
+            )
+            if len(trimesh_scene.geometry) > 0:
+                try:
+                    # Export to GLB format
+                    trimesh_scene.export(str(path), file_type="glb")
+                    print(
+                        "Successfully exported PowerPoint-compatible GLB"
+                        f"to {path}"
+                    )
+                    return str(path)
+                except Exception as e:
+                    print(f"Error during GLB export: {e}")
+            else:
+                print("No valid meshes found for export")
+        except Exception as e:
+            print(f"Error in GLB export: {e}")
+
+        return None
 
     def plot(
         self,
@@ -390,8 +622,7 @@ class Heatmap:
         the heatmap data.
         """
 
-        f, ax = plt.subplots(figsize=(9, 9))
-
+        f, ax = plt.subplots(figsize=(10, 8))
         f, ax = self.plot_subplot(
             fig=f,
             ax=ax,
@@ -403,11 +634,13 @@ class Heatmap:
             show_cbar=show_cbar,
             **kwargs,
         )
+        if self.tight_layout_2d:
+            f.tight_layout()
 
         if filename is not None:
             plt.savefig(filename, dpi=300)
-
-        plt.show()
+        else:
+            plt.show()
         return f
 
     def plot_subplot(
@@ -486,7 +719,8 @@ class Heatmap:
 
         # Sort region segments by area (largest first)
         segments.sort(key=lambda s: s["area"], reverse=True)
-
+        # for annotate_less_clutter
+        track_segment_ocurr = set()
         for segment in segments:
             name = segment["name"]
             segment_nr = segment["segment_nr"]
@@ -504,7 +738,8 @@ class Heatmap:
             )
 
             display_text = self.get_region_annotation_text(name)
-            if display_text is not None:
+            if display_text is not None and name not in track_segment_ocurr:
+                track_segment_ocurr.add(name)
                 annotation_pos = find_annotation_position_inside_polygon(
                     coords
                 )
