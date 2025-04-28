@@ -96,115 +96,6 @@ def find_annotation_position_inside_polygon(
     return label_position.x, label_position.y
 
 
-# TODO: test colors
-def export_powerpoint_compatible_glb(self, path):
-    """
-    Export a PowerPoint-compatible GLB file using PyVista and Trimesh.
-    """
-    from vedo import Plotter
-
-    if path.suffix != ".glb":
-        path = path.with_suffix(".glb")
-
-    # Create a vedo Plotter and add the clean renderables
-    plt_obj = Plotter(interactive=False, offscreen=True)
-    plt_obj.add(self.scene.clean_renderables)
-    plt_obj = plt_obj.show(interactive=False)
-
-    # pyvista to process the meshes Trimesh to optimize
-    import pyvista as pv
-    import trimesh
-
-    all_vertices = []
-    all_faces = []
-    all_colors = []
-    vertex_offset = 0
-
-    for actor in plt_obj.get_actors():
-        if hasattr(actor, "GetProperty"):
-            prop = actor.GetProperty()
-            opacity = prop.GetOpacity()
-
-            # Skip actors that are not fully opaque
-            # OBS: brainrender root default opacity is < 1.0
-            if opacity < 1.0:
-                continue
-
-            if hasattr(actor, "GetMapper") and actor.GetMapper():
-                mapper = actor.GetMapper()
-
-                # Process the mesh data if available
-                if mapper.GetInput():
-                    # Convert VTK data to PyVista mesh
-                    pv_mesh = pv.wrap(mapper.GetInput())
-
-                    # Extract face and vertex data
-                    vertices = pv_mesh.points
-                    faces = []
-
-                    if hasattr(pv_mesh, "faces") and len(pv_mesh.faces) > 0:
-                        # PyVista faces are stored with their size
-                        # so a triangle is [3, v1, v2, v3]
-                        # We need to convert to just [v1, v2, v3]
-                        pv_faces = pv_mesh.faces.reshape(
-                            (-1, 4)
-                        )  # First value is number of points per face (3)
-                        for face in pv_faces:
-                            if face[0] == 3:
-                                faces.append([face[1], face[2], face[3]])
-
-                    # Only add to combined mesh if we have vertices and faces
-                    if len(vertices) > 0 and len(faces) > 0:
-                        # Get color for this mesh
-                        color = prop.GetColor()  # RGB in 0-1 range
-
-                        # Flip the model along y-axis
-                        flipped_vertices = vertices.copy()
-                        flipped_vertices[:, 1] = -flipped_vertices[:, 1]
-
-                        # Add vertices to the combined list
-                        all_vertices.append(flipped_vertices)
-
-                        # Adjust face indices to account for the offset
-                        offset_faces = np.array(faces) + vertex_offset
-                        all_faces.append(offset_faces)
-
-                        # Update vertex offset for the next mesh
-                        vertex_offset += len(flipped_vertices)
-
-                        # Add colors for all faces
-                        mesh_colors = np.tile(
-                            np.array([color[0], color[1], color[2], 1.0])
-                            * 255,
-                            (len(faces), 1),
-                        ).astype(np.uint8)
-                        all_colors.append(mesh_colors)
-
-    if all_vertices and all_faces:
-        # Combine all vertices and faces
-        combined_vertices = np.vstack(all_vertices)
-        combined_faces = np.vstack(all_faces)
-        combined_colors = np.vstack(all_colors)
-
-        # Create a single trimesh helps with powerpoint compatibility
-        combined_mesh = trimesh.Trimesh(
-            vertices=combined_vertices,
-            faces=combined_faces,
-            face_colors=combined_colors,
-        )
-
-        trimesh_scene = trimesh.Scene()
-        trimesh_scene.add_geometry(combined_mesh, geom_name="brain_combined")
-
-        # Export to GLB format
-        trimesh_scene.export(str(path), file_type="glb")
-
-        print(f"Successfully exported PowerPoint-compatible GLB to {path}")
-        return str(path)
-
-    return None
-
-
 class Heatmap:
     def __init__(
         self,
@@ -477,57 +368,49 @@ class Heatmap:
             region_actor = region_actors[0]
             region_actor.color(color)
 
-            # TODO: think on annotate for html and glb
-            if not kwargs.get("export_html") or not kwargs.get("export_glb"):
-                # Handles annotations for 3d
+            # Check if this region should be annotated
+            display_text = self.get_region_annotation_text(region_actor.name)
+            if display_text is None:
+                continue
 
-                # Check if this region should be annotated
-                display_text = self.get_region_annotation_text(
-                    region_actor.name
-                )
-                if display_text is None:
-                    continue
+            # Get the region's intersection with the plane
+            mesh_intersection = self.slicer.plane0.intersect_with(
+                region_actor.mesh
+            )
+            if not mesh_intersection or len(mesh_intersection.vertices) < 4:
+                continue
 
-                # Get the region's intersection with the plane
-                mesh_intersection = self.slicer.plane0.intersect_with(
-                    region_actor.mesh
-                )
-                if (
-                    not mesh_intersection
-                    or len(mesh_intersection.vertices) < 4
-                ):
-                    continue
+            # Get mesh center for hemisphere filtering
+            mesh_center = (
+                self.scene.root.mesh.bounds().reshape((3, 2)).mean(axis=1)
+                if hasattr(self.scene.atlas, "metadata")
+                and self.scene.atlas.metadata.get("symmetric")
+                else self.scene.root.mesh.center_of_mass()
+            )
 
-                # Get mesh center for hemisphere filtering
-                mesh_center = (
-                    self.scene.root.mesh.bounds().reshape((3, 2)).mean(axis=1)
-                    if hasattr(self.scene.atlas, "metadata")
-                    and self.scene.atlas.metadata.get("symmetric")
-                    else self.scene.root.mesh.center_of_mass()
-                )
+            # Get optimal label position from largest valid piece
+            optimal_pos_3d = self.get_optimal_label_position_3d(
+                mesh_intersection, mesh_center
+            )
 
-                # Get optimal label position from largest valid piece
-                optimal_pos_3d = self.get_optimal_label_position_3d(
-                    mesh_intersection, mesh_center
-                )
+            if optimal_pos_3d is None:
+                continue
 
-                if optimal_pos_3d is None:
-                    continue
-
-                # Create and add the label
-                label_actor = Actor(
-                    Point(optimal_pos_3d, r=0.01).alpha(0),
-                    name=f"{region_actor.name}_label",
-                    br_class="brain region annotation",
-                )
-                self.scene.add(label_actor)
-                self.scene.add_label(
-                    actor=label_actor,
-                    label=display_text,
-                    size=300,
-                    radius=100,
-                    yoffset=100,
-                )
+            # Create and add the label
+            label_actor = Actor(
+                Point(optimal_pos_3d, r=0.01).alpha(0),
+                name=f"{region_actor.name}_label",
+                br_class="brain region annotation",
+                is_text=True,
+            )
+            self.scene.add(label_actor)
+            self.scene.add_label(
+                actor=label_actor,
+                label=display_text,
+                size=300,
+                radius=100,
+                yoffset=100,
+            )
 
         if camera is None:
             # set camera position and render
@@ -552,14 +435,141 @@ class Heatmap:
             export_glb_path = kwargs.get("export_glb")
             if export_glb_path is not None:
                 path = Path(export_glb_path)
-                # TODO exclude_root option
-                # exclude_root = kwargs.get("exclude_root", True)
-                export_powerpoint_compatible_glb(self, path)
+
+                if path.suffix != ".glb":
+                    path = path.with_suffix(".glb")
+
+                self.scene.render(
+                    camera=camera, interactive=self.interactive, zoom=self.zoom
+                )
+                self.export_powerpoint_compatible_glb(path, **kwargs)
         else:
             self.scene.render(
                 camera=camera, interactive=self.interactive, zoom=self.zoom
             )
         return self.scene
+
+    def export_powerpoint_compatible_glb(self, path, **kwargs):
+        """
+        Export the scene to GLB format optimized for PowerPoint
+        and custom webpage view.
+
+        Parameters
+        ----------
+        path : Path
+            Path to save the GLB file
+        **kwargs :
+            include_root : bool
+                Whether to include the root (brain outline) in the export.
+                Default is False.
+            + any other kwargs from the software
+
+        Returns
+        -------
+        str
+            Path to the exported file on success, None on failure
+        """
+        try:
+            import trimesh
+            from trimesh.visual.material import PBRMaterial
+
+            print("Starting GLB export process...")
+
+            # Make sure the scene is rendered
+            if not self.scene.is_rendered:
+                print("Rendering scene first...")
+                self.scene.render(interactive=False)
+
+            trimesh_scene = trimesh.Scene()
+
+            print(f"Processing {len(self.scene.clean_actors)} actors...")
+            for idx, actor in enumerate(self.scene.clean_actors):
+                actor_name = actor.name
+                print(f"Processing actor {idx}: {actor_name}")
+
+                # Skip root if not included
+                if actor_name == "root" and not kwargs.get(
+                    "include_root", False
+                ):
+                    print("  Skipping root actor")
+                    continue
+
+                vedo_mesh = actor._mesh
+
+                color = vedo_mesh.color()
+                vertices = vedo_mesh.vertices
+                cells = vedo_mesh.cells  # (faces)
+
+                # Skip meshes with no points or faces
+                if len(vertices) == 0 or len(cells) == 0:
+                    print("  Empty mesh, skipping")
+                    continue
+
+                print(
+                    f"  Mesh has {len(vertices)} points and {len(cells)} faces"
+                )
+
+                # Flip the model along y-axis and z-axis
+                # replicate brainrender and hemispheres
+                flipped_vertices = vertices.copy()
+                flipped_vertices[:, 1] = -flipped_vertices[:, 1]
+                flipped_vertices[:, 2] = -flipped_vertices[:, 2]
+
+                try:
+                    # Convert face list to numpy array for trimesh
+                    faces_array = np.array(cells)
+
+                    mesh = trimesh.Trimesh(
+                        vertices=flipped_vertices,
+                        faces=faces_array,
+                    )
+
+                    alphaMode = "OPAQUE" if actor_name != "root" else "BLEND"
+
+                    material = PBRMaterial(
+                        name=actor_name,
+                        baseColorFactor=[
+                            color[0],
+                            color[1],
+                            color[2],
+                            1.0 if actor_name != "root" else 0.1,
+                        ],
+                        alphaMode=alphaMode,
+                        alphaCutoff=None,
+                        doubleSided=True,
+                        roughnessFactor=None,
+                        metallicFactor=None,
+                    )
+
+                    mesh.visual.material = material
+                    trimesh_scene.add_geometry(mesh, geom_name=actor_name)
+                    print(f"  Added mesh to scene as '{actor_name}'")
+                except Exception as e:
+                    print(f"  Error creating trimesh: {e}")
+                    continue
+
+            # Check if any meshes were added to the scene
+            print(
+                "Created trimesh scene with "
+                f"{len(trimesh_scene.geometry)} geometries"
+            )
+            if len(trimesh_scene.geometry) > 0:
+                try:
+                    # Export to GLB format
+                    trimesh_scene.export(str(path), file_type="glb")
+                    print(
+                        "Successfully exported PowerPoint-compatible GLB"
+                        f"to {path}"
+                    )
+                    return str(path)
+                except Exception as e:
+                    print(f"Error during GLB export: {e}")
+            else:
+                print("No valid meshes found for export")
+        except Exception as e:
+            print(f"Error in GLB export: {e}")
+
+        return None
 
     def plot(
         self,
