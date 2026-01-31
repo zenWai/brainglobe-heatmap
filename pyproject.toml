@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["version"]
 
-dependencies = ["brainrender>=2.1.17", "matplotlib", "numpy", "myterial", "rich", "shapely", "pyvista", "trimesh"]
+dependencies = ["brainrender>=2.1.17", "matplotlib", "numpy", "myterial", "rich", "shapely", "pyvista", "trimesh", "pandas", "ngff-zarr", "rasterio", "s3fs"]
 
 license = { text = "MIT" }
 
@@ -79,6 +79,7 @@ fix = true
 
 [tool.ruff.lint]
 select = ["I", "E", "F", "B"]
+ignore = ["E501"] # aff
 
 [tool.tox]
 legacy_tox_ini = """

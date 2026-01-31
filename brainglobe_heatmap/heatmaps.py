@@ -15,6 +15,7 @@ from shapely.geometry.multipolygon import MultiPolygon
 from vedo import Point
 from vedo.colors import color_map as map_color
 
+from brainglobe_heatmap.heatmaps_atlas_s3 import AtlasS3Heatmap
 from brainglobe_heatmap.slicer import Slicer
 
 # Set settings for heatmap visualization
@@ -119,6 +120,7 @@ class Heatmap:
         annotate_text_options_2d: Optional[Dict] = None,
         check_latest: bool = True,
         tight_layout_2d: bool = False,
+        use_s3_atlas: bool = False,
         **kwargs,
     ):
         """
@@ -180,6 +182,14 @@ class Heatmap:
             If False, annotate every segment with its region name.
         check_latest : bool, optional
             Check for the latest version of the atlas. Default is True.
+        use_s3_atlas : bool, optional
+            Enable S3 atlas mode for direct data loading from BrainGlobe S3.
+            When True, bypasses brainrender/Slicer 3D pipeline.
+            Limited compatibility
+            NOT SUPPORTED YET
+            - 3D
+            - plane angle (position float, orientation float)
+            - atlas -> AtlasS3Heatmap.S3_ATLAS_MAPPING only
         """
         # store arguments
         self.values = values
@@ -195,30 +205,61 @@ class Heatmap:
         self.annotate_less_clutter = annotate_less_clutter
         self.annotate_text_options_2d = annotate_text_options_2d
         self.tight_layout_2d = tight_layout_2d
+        self.use_s3_atlas = use_s3_atlas
+        if use_s3_atlas:
+            AtlasS3Heatmap.validate_basic_params(
+                format, position, orientation, atlas_name
+            )
+            # S3 atlas mode - use AtlasS3Heatmap for data
+            # backwards compatible,
+            # colorbar creation and axis styling on Heatmap.plot_subplot()
 
-        # create a scene
-        self.scene = Scene(
-            atlas_name=atlas_name,
-            title=title,
-            title_color=grey_darker,
-            check_latest=check_latest,
-            **kwargs,
-        )
+            self.AtlasS3Heatmap = AtlasS3Heatmap(
+                values=values,
+                position=float(position),  # type: ignore[arg-type]
+                orientation=str(orientation),
+                atlas_name=atlas_name,
+                hemisphere=hemisphere,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                annotate_regions=annotate_regions,
+                annotate_text_options_2d=annotate_text_options_2d,
+            )
+            # Expose colors/vmin/vmax from atlas implementation
+            self.colors: Dict[str, Union[list, str]] = (
+                self.AtlasS3Heatmap.colors
+            )
+            self.vmin = self.AtlasS3Heatmap.vmin
+            self.vmax = self.AtlasS3Heatmap.vmax
+        else:
+            # create a scene
+            self.scene = Scene(
+                atlas_name=atlas_name,
+                title=title,
+                title_color=grey_darker,
+                check_latest=check_latest,
+                **kwargs,
+            )
 
-        # prep colors range
-        self.prepare_colors(values, cmap, vmin, vmax)
+            # prep colors range
+            self.prepare_colors(values, cmap, vmin, vmax)
 
-        # add regions to the brainrender scene
-        self.scene.add_brain_region(*self.values.keys(), hemisphere=hemisphere)
+            # add regions to the brainrender scene
+            self.scene.add_brain_region(
+                *self.values.keys(), hemisphere=hemisphere
+            )
 
-        self.regions_meshes = [
-            r
-            for r in self.scene.get_actors(br_class="brain region")
-            if r.name != "root"
-        ]
+            self.regions_meshes = [
+                r
+                for r in self.scene.get_actors(br_class="brain region")
+                if r.name != "root"
+            ]
 
-        # prepare slicer object
-        self.slicer = Slicer(position, orientation, thickness, self.scene.root)
+            # prepare slicer object
+            self.slicer = Slicer(
+                position, orientation, thickness, self.scene.root
+            )
 
     def prepare_colors(
         self,
@@ -643,6 +684,73 @@ class Heatmap:
             plt.show()
         return f
 
+    def render_to_axes(
+        self,
+        ax: plt.Axes,
+        contour_color: str = "black",
+        contour_width: float = 0.5,
+    ):
+        # Original brainrender flow
+        projected, _ = self.slicer.get_structures_slice_coords(
+            self.regions_meshes, self.scene.root
+        )
+
+        segments = []
+        for r, coords in projected.items():
+            name, segment_nr = r.split("_segment_")
+            x: np.ndarray = coords[:, 0]
+            y: np.ndarray = coords[:, 1]
+            # calculate area of polygon with Shoelace formula
+            area = 0.5 * np.abs(
+                np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))
+            )
+
+            segments.append(
+                dict(
+                    name=name,
+                    segment_nr=int(segment_nr),
+                    coords=coords,
+                    area=area,
+                )
+            )
+
+        # Sort region segments by area (largest first)
+        segments.sort(key=lambda s: s["area"], reverse=True)
+
+        for segment in segments:
+            name = segment["name"]
+            segment_nr = segment["segment_nr"]
+            coords = segment["coords"]
+
+            ax.fill(
+                coords[:, 0],
+                coords[:, 1],
+                color=self.colors[name],
+                label=(name if segment_nr == "0" and name != "root" else None),
+                lw=contour_width,
+                ec=contour_color,
+                zorder=-1 if name == "root" else None,
+                alpha=0.3 if name == "root" else None,
+            )
+
+            display_text = self.get_region_annotation_text(str(name))
+            if display_text is not None:
+                annotation_pos = find_annotation_position_inside_polygon(
+                    coords
+                )
+                if annotation_pos is not None:
+                    ax.annotate(
+                        display_text,
+                        xy=annotation_pos,
+                        ha="center",
+                        va="center",
+                        **(
+                            self.annotate_text_options_2d
+                            if self.annotate_text_options_2d is not None
+                            else {}
+                        ),
+                    )
+
     def plot_subplot(
         self,
         fig: plt.Figure,
@@ -694,67 +802,15 @@ class Heatmap:
         -----
         This method modifies the provided figure and axes objects in-place.
         """
-        projected, _ = self.slicer.get_structures_slice_coords(
-            self.regions_meshes, self.scene.root
-        )
-
-        segments = []
-        for r, coords in projected.items():
-            name, segment_nr = r.split("_segment_")
-            x: np.ndarray = coords[:, 0]
-            y: np.ndarray = coords[:, 1]
-            # calculate area of polygon with Shoelace formula
-            area = 0.5 * np.abs(
-                np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))
+        if self.use_s3_atlas:
+            # S3 atlas mode - delegate to AtlasS3Heatmap
+            self.AtlasS3Heatmap.atlas_s3_render_to_axes(
+                ax=ax, contour_color="black", contour_width=0.5
             )
-
-            segments.append(
-                dict(
-                    name=name,
-                    segment_nr=int(segment_nr),
-                    coords=coords,
-                    area=area,
-                )
+        else:
+            self.render_to_axes(
+                ax=ax, contour_color="black", contour_width=0.5
             )
-
-        # Sort region segments by area (largest first)
-        segments.sort(key=lambda s: s["area"], reverse=True)
-        # for annotate_less_clutter
-        track_segment_ocurr = set()
-        for segment in segments:
-            name = segment["name"]
-            segment_nr = segment["segment_nr"]
-            coords = segment["coords"]
-
-            ax.fill(
-                coords[:, 0],
-                coords[:, 1],
-                color=self.colors[name],
-                label=name if segment_nr == "0" and name != "root" else None,
-                lw=1,
-                ec="k",
-                zorder=-1 if name == "root" else None,
-                alpha=0.3 if name == "root" else None,
-            )
-
-            display_text = self.get_region_annotation_text(str(name))
-            if display_text is not None and name not in track_segment_ocurr:
-                track_segment_ocurr.add(name)
-                annotation_pos = find_annotation_position_inside_polygon(
-                    coords
-                )
-                if annotation_pos is not None:
-                    ax.annotate(
-                        display_text,
-                        xy=annotation_pos,
-                        ha="center",
-                        va="center",
-                        **(
-                            self.annotate_text_options_2d
-                            if self.annotate_text_options_2d is not None
-                            else {}
-                        ),
-                    )
 
         if show_cbar:
             # make colorbar
@@ -785,8 +841,11 @@ class Heatmap:
                 )
 
         # style axes
-        ax.invert_yaxis()
-        ax.axis("equal")
+        # Only invert y-axis for original flow
+        # Fit axis limits set on AtlasS3Heatmap
+        if not self.use_s3_atlas:
+            ax.invert_yaxis()
+            ax.axis("equal")
         ax.spines["right"].set_visible(False)
         ax.spines["top"].set_visible(False)
 
