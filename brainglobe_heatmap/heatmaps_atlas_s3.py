@@ -6,6 +6,7 @@ import ngff_zarr
 import numpy as np
 import pandas as pd
 import rasterio.features
+from brainglobe_atlasapi import BrainGlobeAtlas
 from brainrender import settings
 from matplotlib import pyplot as plt
 from shapely.algorithms.polylabel import polylabel
@@ -246,6 +247,7 @@ class AtlasS3Heatmap:
         vmax: Optional[float],
         annotate_regions: Optional[Union[bool, List[str], Dict]],
         annotate_text_options_2d: Optional[Dict],
+        use_reference: bool = False,
     ):
         """
         Initialize AtlasS3Heatmap.
@@ -272,6 +274,10 @@ class AtlasS3Heatmap:
             Region annotation settings.
         annotate_text_options_2d : Optional[Dict]
             Text options for annotations.
+        use_reference : bool
+            If True, draw the brain reference image as background
+            instead of the solid-color brain root.
+            Loads reference.tiff from local ~/.brainglobe atlas.
         """
         self.values = values
         self.position = position
@@ -280,6 +286,7 @@ class AtlasS3Heatmap:
         self.hemisphere = hemisphere
         self.annotate_regions = annotate_regions
         self.annotate_text_options_2d = annotate_text_options_2d
+        self.use_reference = use_reference
 
         # Initialize: load data, validate regions exist on atlas, prepare colors
         self.terminology_df, self.annotation_image = self.load_atlas_data(
@@ -289,6 +296,9 @@ class AtlasS3Heatmap:
         self.colors, self.vmin, self.vmax = self._prepare_colors(
             cmap, vmin, vmax
         )
+
+        if self.use_reference:
+            self.reference_data = self._load_reference()
 
     def _validate_region_values_exist(self) -> None:
         """Validate region names and values after loading terminology."""
@@ -338,6 +348,27 @@ class AtlasS3Heatmap:
         colors["root"] = settings.ROOT_COLOR
 
         return colors, final_vmin, final_vmax
+
+    def _load_reference(self) -> np.ndarray:
+        """Load the reference image from local ~/.brainglobe atlas."""
+        bg_atlas = BrainGlobeAtlas(self.atlas_name)
+        return bg_atlas.reference
+
+    def _get_reference_slice(self) -> np.ndarray:
+        """Extract 2D slice from the reference image."""
+        shape = self.reference_data.shape
+        axis = ORIENTATION_TO_AXIS[self.orientation]
+
+        pos = self._microns_to_voxels(self.position)
+        pos = min(pos, shape[axis] - 1)
+        pos = max(0, pos)
+
+        if self.orientation == "frontal":
+            return self.reference_data[pos, :, :]
+        elif self.orientation == "horizontal":
+            return self.reference_data[:, pos, :]
+        else:  # sagittal
+            return self.reference_data[:, :, pos].T
 
     def _microns_to_voxels(self, position_microns: float) -> int:
         """Convert position from microns to voxel coordinates."""
@@ -546,9 +577,24 @@ class AtlasS3Heatmap:
 
         # Brain mask
         brain_mask = slice_data > 0
-        canvas[brain_mask] = mcolors.to_rgba(
-            self.colors["root"], alpha=settings.ROOT_ALPHA
-        )
+
+        if self.use_reference:
+            ref_slice = self._get_reference_slice()
+            # Normalize uint16 to [0, 1]
+            ref_max = ref_slice.max()
+            if ref_max > 0:
+                ref_norm = ref_slice.astype(np.float32) / ref_max
+            else:
+                ref_norm = ref_slice.astype(np.float32)
+            # Apply as grayscale background where brain exists
+            canvas[brain_mask, 0] = ref_norm[brain_mask]
+            canvas[brain_mask, 1] = ref_norm[brain_mask]
+            canvas[brain_mask, 2] = ref_norm[brain_mask]
+            canvas[brain_mask, 3] = 1.0
+        else:
+            canvas[brain_mask] = mcolors.to_rgba(
+                self.colors["root"], alpha=settings.ROOT_ALPHA
+            )
 
         # Store masks for contours and annotations
         region_masks = []

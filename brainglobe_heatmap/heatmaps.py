@@ -121,6 +121,7 @@ class Heatmap:
         check_latest: bool = True,
         tight_layout_2d: bool = False,
         use_s3_atlas: bool = False,
+        use_reference: bool = False,
         **kwargs,
     ):
         """
@@ -190,6 +191,11 @@ class Heatmap:
             - 3D
             - plane angle (position float, orientation float)
             - atlas -> AtlasS3Heatmap.S3_ATLAS_MAPPING only
+        use_reference : bool, optional
+            When True and use_s3_atlas=True, draws the brain reference
+            image as background instead of the solid-color brain root.
+            Loads reference.tiff from local ~/.brainglobe atlas.
+            Default is False.
         """
         # store arguments
         self.values = values
@@ -225,6 +231,7 @@ class Heatmap:
                 vmax=vmax,
                 annotate_regions=annotate_regions,
                 annotate_text_options_2d=annotate_text_options_2d,
+                use_reference=use_reference,
             )
             # Expose colors/vmin/vmax from atlas implementation
             self.colors: Dict[str, Union[list, str]] = (
