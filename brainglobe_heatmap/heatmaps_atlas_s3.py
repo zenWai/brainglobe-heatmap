@@ -248,6 +248,7 @@ class AtlasS3Heatmap:
         annotate_regions: Optional[Union[bool, List[str], Dict]],
         annotate_text_options_2d: Optional[Dict],
         use_reference: bool = False,
+        reference_alpha: float = 0.5,
     ):
         """
         Initialize AtlasS3Heatmap.
@@ -278,6 +279,9 @@ class AtlasS3Heatmap:
             If True, draw the brain reference image as background
             instead of the solid-color brain root.
             Loads reference.tiff from local ~/.brainglobe atlas.
+        reference_alpha : float
+            Transparency of the reference image (0.0 = fully transparent,
+            1.0 = fully opaque). Default is 0.5.
         """
         self.values = values
         self.position = position
@@ -287,6 +291,7 @@ class AtlasS3Heatmap:
         self.annotate_regions = annotate_regions
         self.annotate_text_options_2d = annotate_text_options_2d
         self.use_reference = use_reference
+        self.reference_alpha = reference_alpha
 
         # Initialize: load data, validate regions exist on atlas, prepare colors
         self.terminology_df, self.annotation_image = self.load_atlas_data(
@@ -584,6 +589,7 @@ class AtlasS3Heatmap:
             # Apply gray colormap as background where brain exists
             cmap_gray = plt.cm.gray
             ref_rgba = cmap_gray(ref_norm)
+            ref_rgba[:, :, 3] = self.reference_alpha
             canvas[brain_mask] = ref_rgba[brain_mask]
         else:
             canvas[brain_mask] = mcolors.to_rgba(

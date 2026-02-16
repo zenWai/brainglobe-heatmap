@@ -122,6 +122,7 @@ class Heatmap:
         tight_layout_2d: bool = False,
         use_s3_atlas: bool = False,
         use_reference: bool = False,
+        reference_alpha: float = 0.5,
         **kwargs,
     ):
         """
@@ -196,6 +197,9 @@ class Heatmap:
             image as background instead of the solid-color brain root.
             Loads reference.tiff from local ~/.brainglobe atlas.
             Default is False.
+        reference_alpha : float, optional
+            Transparency of the reference image (0.0 = fully transparent,
+            1.0 = fully opaque). Default is 0.5.
         """
         # store arguments
         self.values = values
@@ -232,6 +236,7 @@ class Heatmap:
                 annotate_regions=annotate_regions,
                 annotate_text_options_2d=annotate_text_options_2d,
                 use_reference=use_reference,
+                reference_alpha=reference_alpha,
             )
             # Expose colors/vmin/vmax from atlas implementation
             self.colors: Dict[str, Union[list, str]] = (
