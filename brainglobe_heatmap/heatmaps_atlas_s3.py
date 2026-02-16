@@ -387,12 +387,12 @@ class AtlasS3Heatmap:
         scale_mm = self.annotation_image.scale
         return voxel_count * scale_mm[axis] * 1000
 
-    def _get_slice_extent_centered(
-        self, h, w
-    ) -> Tuple[float, float, float, float]:
-        """Get centered-at-zero extent for imshow based on orientation."""
+    def _get_slice_extent(self, h, w) -> Tuple[float, float, float, float]:
+        """Get atlas-space extent for imshow based on orientation.
 
-        # Map orientation to physical axes for (height, width)
+        Returns (left, right, bottom, top) for imshow extent.
+        y=0 at top (dorsal), y=h_um at bottom (ventral).
+        """
         orientation_axes = {
             "frontal": ("y", "x"),  # rows=Y, cols=X
             "horizontal": ("z", "x"),  # rows=Z, cols=X
@@ -403,13 +403,14 @@ class AtlasS3Heatmap:
         y_size = self._voxels_to_microns(h, h_axis)
         x_size = self._voxels_to_microns(w, w_axis)
 
-        return -x_size / 2, x_size / 2, -y_size / 2, y_size / 2
+        # imshow extent: [left, right, bottom, top]
+        # bottom > top so y=0 is at top of image
+        return 0, x_size, y_size, 0
 
-    def _pixel_to_microns_centered(
+    def _pixel_to_microns(
         self, pixel_pos: Tuple[float, float], shape: Tuple[int, int]
     ) -> Tuple[float, float]:
-        """Convert pixel position to centered micron coordinates."""
-        h, w = shape
+        """Convert pixel position to atlas-space micron coordinates."""
         x_pixel, y_pixel = pixel_pos
 
         orientation_axes = {
@@ -419,16 +420,10 @@ class AtlasS3Heatmap:
         }
         h_axis, w_axis = orientation_axes[self.orientation]
 
-        # Convert to microns
         x_microns = self._voxels_to_microns(int(x_pixel), w_axis)
         y_microns = self._voxels_to_microns(int(y_pixel), h_axis)
 
-        # Center (subtract half of total size)
-        x_centered = x_microns - self._voxels_to_microns(w, w_axis) / 2
-        # Flip Y: pixel y=0 (top) → positive microns, pixel y=h (bottom) → negative
-        y_centered = self._voxels_to_microns(h, h_axis) / 2 - y_microns
-
-        return x_centered, y_centered
+        return x_microns, y_microns
 
     def _get_atlas_slice(self) -> np.ndarray:
         """Extract 2D slice based on orientation and position."""
@@ -586,11 +581,10 @@ class AtlasS3Heatmap:
                 ref_norm = ref_slice.astype(np.float32) / ref_max
             else:
                 ref_norm = ref_slice.astype(np.float32)
-            # Apply as grayscale background where brain exists
-            canvas[brain_mask, 0] = ref_norm[brain_mask]
-            canvas[brain_mask, 1] = ref_norm[brain_mask]
-            canvas[brain_mask, 2] = ref_norm[brain_mask]
-            canvas[brain_mask, 3] = 1.0
+            # Apply gray colormap as background where brain exists
+            cmap_gray = plt.cm.gray
+            ref_rgba = cmap_gray(ref_norm)
+            canvas[brain_mask] = ref_rgba[brain_mask]
         else:
             canvas[brain_mask] = mcolors.to_rgba(
                 self.colors["root"], alpha=settings.ROOT_ALPHA
@@ -606,9 +600,9 @@ class AtlasS3Heatmap:
 
         # voxels to microns for axis, contours, annotations
         h, w = slice_data.shape
-        # Y grow upwards, X grow right, 0-centered
-        axis_extent = self._get_slice_extent_centered(h, w)
-        # Contour have different indexes wtf
+        # Atlas-space: x from 0, y from 0 (top) to max (bottom)
+        axis_extent = self._get_slice_extent(h, w)
+        # contour extent: [xmin, xmax, ymin, ymax]
         contour_extent = (
             axis_extent[0],
             axis_extent[1],
@@ -632,7 +626,7 @@ class AtlasS3Heatmap:
             display_text = self._get_annotation_text(region)
             if display_text is not None:
                 pixel_pos = self._find_annotation_position(mask)
-                micron_pos = self._pixel_to_microns_centered(
+                micron_pos = self._pixel_to_microns(
                     pixel_pos, slice_data.shape
                 )
                 ax.annotate(
@@ -649,17 +643,18 @@ class AtlasS3Heatmap:
         y_min_px, y_max_px = np.where(rows)[0][[0, -1]]
         x_min_px, x_max_px = np.where(cols)[0][[0, -1]]
 
-        x_min_um, y_min_um = self._pixel_to_microns_centered(
-            (x_min_px, y_max_px), slice_data.shape
+        x_min_um, y_min_um = self._pixel_to_microns(
+            (x_min_px, y_min_px), slice_data.shape
         )
-        x_max_um, y_max_um = self._pixel_to_microns_centered(
-            (x_max_px, y_min_px), slice_data.shape
+        x_max_um, y_max_um = self._pixel_to_microns(
+            (x_max_px, y_max_px), slice_data.shape
         )
 
-        # Add 3% padding
+        # Add 4% padding
         x_padding = (x_max_um - x_min_um) * 0.04
         y_padding = (y_max_um - y_min_um) * 0.04
         ax.set_xlim(x_min_um - x_padding, x_max_um + x_padding)
-        ax.set_ylim(y_min_um - y_padding, y_max_um + y_padding)
+        # y-axis is inverted (0 at top), so max at bottom, min at top
+        ax.set_ylim(y_max_um + y_padding, y_min_um - y_padding)
         ax.set_aspect("equal")
         # flow continues on Heatmaps.plot_subplot
