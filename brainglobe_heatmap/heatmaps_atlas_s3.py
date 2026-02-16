@@ -9,6 +9,7 @@ import rasterio.features
 from brainglobe_atlasapi import BrainGlobeAtlas
 from brainrender import settings
 from matplotlib import pyplot as plt
+from scipy.ndimage import map_coordinates
 from shapely.algorithms.polylabel import polylabel
 from shapely.geometry import shape as shapely_shape
 from vedo.colors import color_map as vedo_map_color
@@ -158,10 +159,12 @@ class AtlasS3Heatmap:
         format, position, orientation, atlas_name
     ) -> None:
         """Validate basic parameters before loading data.
-        NOT SUPPORTED YET
-        - 3D
-        - plane angle (position float, orientation float)
-        - atlas -> S3_ATLAS_MAPPING only
+
+        Supported combinations:
+        - scalar position + string orientation (axis-aligned)
+        - tuple(3) position + string orientation (extract axis component)
+        - tuple(3) position + tuple(3) orientation (oblique slicing)
+        - scalar position + tuple orientation -> ValueError
         """
 
         if format != "2D":
@@ -169,26 +172,67 @@ class AtlasS3Heatmap:
                 "When use_atlas=True, only format='2D' is supported"
             )
 
-        # Position must be single numeric value
-        if not isinstance(position, (int, float, np.number)):
+        # Classify position
+        is_scalar_pos = isinstance(position, (int, float, np.number))
+        is_tuple_pos = isinstance(position, (list, tuple, np.ndarray))
+
+        if is_tuple_pos:
+            pos_arr = np.asarray(position, dtype=float)
+            if pos_arr.ndim != 1 or pos_arr.shape[0] != 3:
+                raise ValueError(
+                    "When use_atlas=True, tuple position must have "
+                    "exactly 3 elements (z, y, x)"
+                )
+        elif not is_scalar_pos:
             raise ValueError(
-                "When use_atlas=True, position must be a single numeric value"
+                "When use_atlas=True, position must be a single "
+                "numeric value or a 3-element tuple/list/array"
             )
 
-        # Orientation must be a string
-        if not isinstance(orientation, str):
+        # Classify orientation
+        is_string_ori = isinstance(orientation, str)
+        is_tuple_ori = isinstance(orientation, (list, tuple, np.ndarray))
+
+        if is_string_ori:
+            if orientation not in ORIENTATION_TO_AXIS:
+                raise ValueError(
+                    "When use_atlas=True, orientation must be "
+                    "'frontal', 'sagittal', or 'horizontal'"
+                )
+        elif is_tuple_ori:
+            try:
+                ori_arr = np.asarray(orientation, dtype=float)
+            except (ValueError, TypeError) as err:
+                raise ValueError(
+                    "When use_atlas=True, orientation must be "
+                    "'frontal', 'sagittal', or 'horizontal', "
+                    "or a 3-element numeric tuple/list/array"
+                ) from err
+            if ori_arr.ndim != 1 or ori_arr.shape[0] != 3:
+                raise ValueError(
+                    "When use_atlas=True, tuple orientation must "
+                    "have exactly 3 elements"
+                )
+            if np.linalg.norm(ori_arr) == 0:
+                raise ValueError(
+                    "When use_atlas=True, orientation vector "
+                    "must be non-zero"
+                )
+        else:
             raise ValueError(
                 "When use_atlas=True, orientation must be "
-                "'frontal', 'sagittal', or 'horizontal'"
+                "'frontal', 'sagittal', or 'horizontal', "
+                "or a 3-element tuple/list/array"
             )
 
-        if orientation not in ORIENTATION_TO_AXIS:
+        # Cross-validate: scalar position + tuple orientation is invalid
+        if is_scalar_pos and is_tuple_ori:
             raise ValueError(
-                "When use_atlas=True, orientation must be "
-                "'frontal', 'sagittal', or 'horizontal'"
+                "When use_atlas=True, a tuple orientation requires "
+                "a 3D position tuple (z, y, x), not a scalar"
             )
 
-        # Atlas name must be in the supported mapping (None defaults to allen_mouse_25um)
+        # Atlas name must be in the supported mapping
         if atlas_name is not None and atlas_name not in S3_ATLAS_MAPPING:
             supported = ", ".join(sorted(S3_ATLAS_MAPPING.keys()))
             raise ValueError(
@@ -238,8 +282,8 @@ class AtlasS3Heatmap:
     def __init__(
         self,
         values: Dict,
-        position: float,
-        orientation: str,
+        position: Union[float, int, list, tuple, np.ndarray],
+        orientation: Union[str, list, tuple, np.ndarray],
         atlas_name: str | None,
         hemisphere: str,
         cmap: str,
@@ -257,10 +301,12 @@ class AtlasS3Heatmap:
         ----------
         values : Dict
             Dictionary with brain region acronyms as keys and values.
-        position : float
-            Position along the slicing axis in microns.
-        orientation : str
-            One of 'frontal', 'sagittal', or 'horizontal'.
+        position : float, int, list, tuple, or np.ndarray
+            Scalar position along the slicing axis in microns,
+            or a 3-element (z, y, x) position in microns.
+        orientation : str, list, tuple, or np.ndarray
+            One of 'frontal', 'sagittal', 'horizontal',
+            or a 3-element normal vector for oblique slicing.
         atlas_name : str | None
             Name of the atlas (e.g., 'allen_mouse_25um').
         hemisphere : str
@@ -284,8 +330,6 @@ class AtlasS3Heatmap:
             1.0 = fully opaque). Default is 0.5.
         """
         self.values = values
-        self.position = position
-        self.orientation = orientation
         self.atlas_name = atlas_name or "allen_mouse_25um"
         self.hemisphere = hemisphere
         self.annotate_regions = annotate_regions
@@ -293,10 +337,42 @@ class AtlasS3Heatmap:
         self.use_reference = use_reference
         self.reference_alpha = reference_alpha
 
-        # Initialize: load data, validate regions exist on atlas, prepare colors
+        # Load data first (needed for grid param computation)
         self.terminology_df, self.annotation_image = self.load_atlas_data(
             self.atlas_name
         )
+
+        # Determine slicing mode based on position/orientation types
+        if isinstance(position, (list, tuple, np.ndarray)) and isinstance(
+            orientation, (list, tuple, np.ndarray)
+        ):
+            # Oblique slicing: tuple position + tuple orientation
+            self.is_oblique = True
+            self.position_3d = np.asarray(position, dtype=float)
+            normal = np.asarray(orientation, dtype=float)
+            self.orientation_3d = normal / np.linalg.norm(normal)
+            self._plane_u, self._plane_v = self._compute_basis_vectors(
+                self.orientation_3d
+            )
+            self._compute_oblique_grid_params()
+            # Store string attrs for compatibility
+            self.orientation: str = "oblique"
+            self.position: float = 0.0  # not used in oblique path
+        elif isinstance(position, (list, tuple, np.ndarray)) and isinstance(
+            orientation, str
+        ):
+            # Tuple position + string orientation: extract axis
+            self.is_oblique = False
+            pos_arr = np.asarray(position, dtype=float)
+            axis = ORIENTATION_TO_AXIS[orientation]
+            self.position = float(pos_arr[axis])
+            self.orientation = orientation
+        else:
+            # Scalar position + string orientation (existing)
+            self.is_oblique = False
+            self.position = float(position)  # type: ignore[arg-type]
+            self.orientation = str(orientation)
+
         self._validate_region_values_exist()
         self.colors, self.vmin, self.vmax = self._prepare_colors(
             cmap, vmin, vmax
@@ -359,8 +435,176 @@ class AtlasS3Heatmap:
         bg_atlas = BrainGlobeAtlas(self.atlas_name)
         return bg_atlas.reference
 
+    # --- Oblique slicing helpers ---
+
+    def _position_to_voxels_3d(
+        self, position_microns: np.ndarray
+    ) -> np.ndarray:
+        """Convert 3D (z, y, x) microns to voxel coordinates."""
+        scale_mm = self.annotation_image.scale
+        scale_um = np.array(
+            [
+                scale_mm["z"] * 1000,
+                scale_mm["y"] * 1000,
+                scale_mm["x"] * 1000,
+            ]
+        )
+        return position_microns / scale_um
+
+    @staticmethod
+    def _compute_basis_vectors(
+        normal: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute orthonormal basis vectors u (columns) and
+        v (rows) for a slicing plane given its unit normal.
+
+        Uses a camera look-at approach with the Y-axis
+        (dorsal-ventral) as preferred "up" direction,
+        then applies independent sign corrections so that
+        cardinal normals match the axis-aligned image layout:
+          frontal  (1,0,0): cols=+X, rows=+Y
+          horizontal (0,1,0): cols=+X, rows=+Z
+          sagittal (0,0,1): cols=+Z, rows=+Y
+
+        Handedness of the resulting frame does not matter
+        because u and v are only used for grid sampling
+        coordinates, not cross-product reconstruction.
+        """
+        up = np.array([0.0, 1.0, 0.0])
+        if abs(np.dot(normal, up)) > 0.99:
+            up = np.array([1.0, 0.0, 0.0])
+
+        u = np.cross(normal, up)
+        u = u / np.linalg.norm(u)
+        v = np.cross(u, normal)
+        v = v / np.linalg.norm(v)
+
+        # Independent sign corrections: ensure the dominant
+        # component of each vector is positive so that image
+        # axes point in the conventional atlas direction
+        # (+X right, +Y down, +Z down for horizontal).
+        if u[np.argmax(np.abs(u))] < 0:
+            u = -u
+        if v[np.argmax(np.abs(v))] < 0:
+            v = -v
+
+        return u, v
+
+    def _compute_oblique_grid_params(self) -> None:
+        """Pre-compute the 2D sampling grid for oblique slicing.
+
+        Projects volume bounding box corners onto the plane to
+        determine the sampling extent, then stores grid parameters.
+        """
+        shape = self.annotation_image.data.shape  # (Z, Y, X)
+        scale_mm = self.annotation_image.scale
+        scale_um = np.array(
+            [
+                scale_mm["z"] * 1000,
+                scale_mm["y"] * 1000,
+                scale_mm["x"] * 1000,
+            ]
+        )
+
+        # Volume extent in microns
+        vol_extent_um = np.array(shape, dtype=float) * scale_um
+
+        # Build 8 bounding box corners in microns
+        corners = np.array(
+            np.meshgrid(
+                [0, vol_extent_um[0]],
+                [0, vol_extent_um[1]],
+                [0, vol_extent_um[2]],
+            )
+        ).T.reshape(-1, 3)
+
+        # Project corners onto plane (relative to center)
+        center = self.position_3d
+        rel = corners - center
+        s_coords = rel @ self._plane_u
+        t_coords = rel @ self._plane_v
+
+        # Sampling extent
+        s_min, s_max = s_coords.min(), s_coords.max()
+        t_min, t_max = t_coords.min(), t_coords.max()
+
+        # Voxel spacing along u and v directions
+        u_spacing = np.linalg.norm(self._plane_u * scale_um)
+        v_spacing = np.linalg.norm(self._plane_v * scale_um)
+
+        # Grid dimensions
+        n_s = int(np.ceil((s_max - s_min) / u_spacing))
+        n_t = int(np.ceil((t_max - t_min) / v_spacing))
+
+        self._s_range = (s_min, s_max)
+        self._t_range = (t_min, t_max)
+        self._grid_shape = (n_t, n_s)  # (rows, cols)
+        self._center_voxel = self._position_to_voxels_3d(center)
+        self._u_spacing = u_spacing
+        self._v_spacing = v_spacing
+
+    def _get_oblique_slice(
+        self, volume: np.ndarray, interpolation_order: int = 0
+    ) -> np.ndarray:
+        """Sample a 2D oblique slice from a 3D volume.
+
+        Parameters
+        ----------
+        volume : np.ndarray
+            3D volume array (Z, Y, X).
+        interpolation_order : int
+            0 for nearest-neighbor (annotation labels),
+            1 for linear (reference images).
+
+        Returns
+        -------
+        np.ndarray
+            2D slice array of shape self._grid_shape.
+        """
+        n_t, n_s = self._grid_shape
+        s_vals = np.linspace(self._s_range[0], self._s_range[1], n_s)
+        t_vals = np.linspace(self._t_range[0], self._t_range[1], n_t)
+
+        ss, tt = np.meshgrid(s_vals, t_vals)
+
+        scale_mm = self.annotation_image.scale
+        scale_um = np.array(
+            [
+                scale_mm["z"] * 1000,
+                scale_mm["y"] * 1000,
+                scale_mm["x"] * 1000,
+            ]
+        )
+
+        # 3D sample coordinates in microns, then convert to voxels
+        # center + u*s + v*t  (all in microns)
+        coords_um = (
+            self.position_3d[np.newaxis, np.newaxis, :]
+            + self._plane_u[np.newaxis, np.newaxis, :] * ss[:, :, np.newaxis]
+            + self._plane_v[np.newaxis, np.newaxis, :] * tt[:, :, np.newaxis]
+        )
+
+        coords_vox = coords_um / scale_um[np.newaxis, np.newaxis, :]
+
+        # map_coordinates expects (3, N) array of [z, y, x] indices
+        coords_flat = coords_vox.reshape(-1, 3).T
+
+        result = map_coordinates(
+            volume,
+            coords_flat,
+            order=interpolation_order,
+            mode="constant",
+            cval=0,
+        )
+        return result.reshape(n_t, n_s)
+
     def _get_reference_slice(self) -> np.ndarray:
         """Extract 2D slice from the reference image."""
+        if self.is_oblique:
+            return self._get_oblique_slice(
+                self.reference_data, interpolation_order=1
+            )
+
         shape = self.reference_data.shape
         axis = ORIENTATION_TO_AXIS[self.orientation]
 
@@ -398,6 +642,11 @@ class AtlasS3Heatmap:
         Returns (left, right, bottom, top) for imshow extent.
         y=0 at top (dorsal), y=h_um at bottom (ventral).
         """
+        if self.is_oblique:
+            x_size = w * self._u_spacing
+            y_size = h * self._v_spacing
+            return 0, x_size, y_size, 0
+
         orientation_axes = {
             "frontal": ("y", "x"),  # rows=Y, cols=X
             "horizontal": ("z", "x"),  # rows=Z, cols=X
@@ -418,6 +667,11 @@ class AtlasS3Heatmap:
         """Convert pixel position to atlas-space micron coordinates."""
         x_pixel, y_pixel = pixel_pos
 
+        if self.is_oblique:
+            x_microns = x_pixel * self._u_spacing
+            y_microns = y_pixel * self._v_spacing
+            return x_microns, y_microns
+
         orientation_axes = {
             "frontal": ("y", "x"),
             "horizontal": ("z", "x"),
@@ -432,6 +686,10 @@ class AtlasS3Heatmap:
 
     def _get_atlas_slice(self) -> np.ndarray:
         """Extract 2D slice based on orientation and position."""
+        if self.is_oblique:
+            volume = self.annotation_image.data.compute()
+            return self._get_oblique_slice(volume, interpolation_order=0)
+
         shape = self.annotation_image.data.shape
         axis = ORIENTATION_TO_AXIS[self.orientation]
 
@@ -452,6 +710,9 @@ class AtlasS3Heatmap:
         if self.hemisphere == "both":
             return slice_data
 
+        if self.is_oblique:
+            return self._apply_hemisphere_filter_oblique(slice_data)
+
         if self.orientation == "sagittal":
             return slice_data
 
@@ -462,6 +723,38 @@ class AtlasS3Heatmap:
             result[:, midpoint:] = 0
         elif self.hemisphere == "right":
             result[:, :midpoint] = 0
+
+        return result
+
+    def _apply_hemisphere_filter_oblique(
+        self, slice_data: np.ndarray
+    ) -> np.ndarray:
+        """Hemisphere filter for oblique slices.
+
+        Computes the X-coordinate (left-right axis) of each grid
+        pixel in 3D and compares against the volume midplane.
+        """
+        n_t, n_s = self._grid_shape
+        s_vals = np.linspace(self._s_range[0], self._s_range[1], n_s)
+        t_vals = np.linspace(self._t_range[0], self._t_range[1], n_t)
+
+        ss, tt = np.meshgrid(s_vals, t_vals)
+
+        # X-coordinate (axis=2) of each grid point in microns
+        x_coords = (
+            self.position_3d[2] + self._plane_u[2] * ss + self._plane_v[2] * tt
+        )
+
+        # Volume midplane in microns (X axis)
+        scale_mm = self.annotation_image.scale
+        vol_x_um = self.annotation_image.data.shape[2] * scale_mm["x"] * 1000
+        midplane_x = vol_x_um / 2.0
+
+        result = slice_data.copy()
+        if self.hemisphere == "left":
+            result[x_coords > midplane_x] = 0
+        elif self.hemisphere == "right":
+            result[x_coords < midplane_x] = 0
 
         return result
 

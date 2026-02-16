@@ -226,8 +226,8 @@ class Heatmap:
 
             self.AtlasS3Heatmap = AtlasS3Heatmap(
                 values=values,
-                position=float(position),  # type: ignore[arg-type]
-                orientation=str(orientation),
+                position=position,
+                orientation=orientation,
                 atlas_name=atlas_name,
                 hemisphere=hemisphere,
                 cmap=cmap,
