@@ -68,7 +68,9 @@ class Plane:
         )
 
     # for Slicer.get_structures_slice_coords()
-    def get_projections(self, actors: List[Actor]) -> Dict[str, np.ndarray]:
+    def get_projections(
+        self, actors: List[Actor], project_fn=None
+    ) -> Dict[str, np.ndarray]:
         projected = {}
         for actor in actors:
             mesh: vd.Mesh = actor._mesh
@@ -79,7 +81,7 @@ class Plane:
             for piece_n, piece in enumerate(pieces):
                 # sort coordinates
                 points = piece.join(reset=True).vertices
-                projected[actor.name + f"_segment_{piece_n}"] = self.p3_to_p2(
+                projected[actor.name + f"_segment_{piece_n}"] = project_fn(
                     points
                 )
         return projected

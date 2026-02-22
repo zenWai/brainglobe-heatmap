@@ -72,6 +72,14 @@ class Slicer:
             plane0 = Plane(_position, u0, v0)
             u1, v1 = u0.copy(), -v0.copy()  # set u1:=u0 and v1:=-v0
             plane1 = Plane(p1, u1, v1)
+
+            # M for 2D
+            if orientation == "frontal":
+                self._proj_M = np.array([[0, 0], [0, 1], [1, 0]])
+            elif orientation == "sagittal":
+                self._proj_M = np.array([[1, 0], [0, 1], [0, 0]])
+            else:  # orientation == "horizontal"
+                self._proj_M = np.array([[0, 1], [0, 0], [1, 0]])
         else:
             orientation = np.array(orientation)
 
@@ -81,6 +89,27 @@ class Slicer:
             plane0 = Plane.from_norm(_position, norm0)
             norm1 = -orientation  # type: ignore
             plane1 = Plane.from_norm(p1, norm1)
+
+            # M based on dominant axis
+            norm = orientation / np.linalg.norm(orientation)
+            dominant = np.argmax(np.abs(orientation))
+            if dominant == 0:  # frontal-like
+                u_proj = np.array([0.0, 0.0, 1.0])
+                v_proj = np.array([0.0, 1.0, 0.0])
+            elif dominant == 1:  # horizontal-like
+                u_proj = np.array([0.0, 0.0, 1.0])
+                v_proj = np.array([1.0, 0.0, 0.0])
+            else:  # sagittal-like
+                u_proj = np.array([1.0, 0.0, 0.0])
+                v_proj = np.array([0.0, 1.0, 0.0])
+
+            u_proj = u_proj - np.dot(u_proj, norm) * norm
+            u_proj = u_proj / np.linalg.norm(u_proj)
+            v_candidate = np.cross(norm, u_proj)
+            # flip image when dominant changes
+            if np.dot(v_candidate, v_proj) < 0:
+                v_candidate = -v_candidate
+            self._proj_M = np.vstack([u_proj, v_candidate]).T
 
         self.plane0 = Actor(
             plane0,
@@ -93,6 +122,12 @@ class Slicer:
             br_class="plane",
         )
 
+    def _project_to_2d(self, points_br: np.ndarray) -> np.ndarray:
+        """Project 3D brainrender points to 2D atlas-space coordinates."""
+        pts = points_br.copy()
+        pts[:, 2] = -pts[:, 2]  # undo brainrender Z-flip
+        return pts @ self._proj_M
+
     def get_structures_slice_coords(self, regions: List[Actor], root: Actor):
         """
         It computes the intersection between the first slice plane and all
@@ -103,7 +138,9 @@ class Slicer:
         """
         regions = regions + [root]
 
-        projected: Dict[str, np.ndarray] = self.plane0.get_projections(regions)
+        projected: Dict[str, np.ndarray] = self.plane0.get_projections(
+            regions, project_fn=self._project_to_2d
+        )
 
         # get output coordinates
         coordinates: Dict[str, List[np.ndarray]] = dict()
