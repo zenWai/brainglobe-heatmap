@@ -1,5 +1,3 @@
-from typing import Dict, List
-
 import numpy as np
 import vedo as vd
 import vtkmodules.all as vtk
@@ -66,22 +64,3 @@ class Plane:
         return mesh.intersect_with_plane(
             origin=self.center, normal=self.normal
         )
-
-    # for Slicer.get_structures_slice_coords()
-    def get_projections(
-        self, actors: List[Actor], project_fn=None
-    ) -> Dict[str, np.ndarray]:
-        projected = {}
-        for actor in actors:
-            mesh: vd.Mesh = actor._mesh
-            intersection = self.intersect_with(mesh)
-            if not intersection.vertices.shape[0]:
-                continue
-            pieces = intersection.split()  # intersection.split() in newer vedo
-            for piece_n, piece in enumerate(pieces):
-                # sort coordinates
-                points = piece.join(reset=True).vertices
-                projected[actor.name + f"_segment_{piece_n}"] = project_fn(
-                    points
-                )
-        return projected

@@ -138,9 +138,17 @@ class Slicer:
         """
         regions = regions + [root]
 
-        projected: Dict[str, np.ndarray] = self.plane0.get_projections(
-            regions, project_fn=self._project_to_2d
-        )
+        projected = {}
+        for actor in regions:
+            intersection = self.plane0.intersect_with(actor._mesh)
+            if not intersection.vertices.shape[0]:
+                continue
+            pieces = intersection.split()
+            for piece_n, piece in enumerate(pieces):
+                points = piece.join(reset=True).vertices
+                projected[actor.name + f"_segment_{piece_n}"] = (
+                    self._project_to_2d(points)
+                )
 
         # get output coordinates
         coordinates: Dict[str, List[np.ndarray]] = dict()
