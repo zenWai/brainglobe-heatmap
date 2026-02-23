@@ -1,3 +1,5 @@
+from typing import Dict, List
+
 import numpy as np
 import vedo as vd
 import vtkmodules.all as vtk
@@ -64,3 +66,27 @@ class Plane:
         return mesh.intersect_with_plane(
             origin=self.center, normal=self.normal
         )
+
+    def get_projections(self, actors: List[Actor]) -> Dict[str, np.ndarray]:
+        """
+        Intersect meshes with this plane and project to local 2D coordinates.
+
+        Returns coordinates relative to the plane center using the plane's
+        own u,v basis vectors: (0, 0) corresponds to the plane center.
+        For atlas-space coordinates, use Slicer.get_structures_slice_coords().
+
+        """
+        projected = {}
+        for actor in actors:
+            mesh: vd.Mesh = actor._mesh
+            intersection = self.intersect_with(mesh)
+            if not intersection.vertices.shape[0]:
+                continue
+            pieces = intersection.split()  # intersection.split() in newer vedo
+            for piece_n, piece in enumerate(pieces):
+                # sort coordinates
+                points = piece.join(reset=True).vertices
+                projected[actor.name + f"_segment_{piece_n}"] = self.p3_to_p2(
+                    points
+                )
+        return projected
