@@ -103,3 +103,31 @@ def test_tuple_orientation_matches_named(orientation, region):
         f"{orientation}/{region}: named vs tuple coords differ. "
         f"max_dist={max_dist:.0f} µm, threshold={THRESHOLD_UM} µm"
     )
+
+
+# expects Z produce 2D spread on both axes by checking root.
+# a root can't be this ${MIN_SPREAD_UM} thin
+# can catch issues with norm
+@pytest.mark.parametrize(
+    "orientation", [(1, 1, 0), (1, 0, 1), (0, 1, 1), (0.3, 0.7, 1)]
+)
+def test_oblique_orientation_has_2d_spread(orientation):
+    MIN_SPREAD_UM = 500
+
+    coords = bgh.get_structures_slice_coords(
+        REGIONS, position=POSITION, orientation=orientation
+    )
+
+    root_pts = np.vstack(coords["root"])
+    spread = root_pts.max(axis=0) - root_pts.min(axis=0)
+
+    assert spread[0] > MIN_SPREAD_UM, (
+        f"orientation={orientation}: "
+        f"spread={spread[0]:.0f} µm "
+        f"(min {MIN_SPREAD_UM} µm expected)"
+    )
+    assert spread[1] > MIN_SPREAD_UM, (
+        f"orientation={orientation}: "
+        f"spread={spread[1]:.0f} µm "
+        f"(min {MIN_SPREAD_UM} µm expected)"
+    )

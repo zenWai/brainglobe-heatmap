@@ -92,6 +92,9 @@ class Slicer:
 
             # M based on dominant axis
             norm = orientation / np.linalg.norm(orientation)
+            # _project_to_2d unflips Z before projecting
+            # the effective normal in atlas space is (nx, ny, -nz)
+            norm[2] = -norm[2]  # atlas-space normal
             dominant = np.argmax(np.abs(orientation))
             if dominant == 0:  # frontal-like
                 u_proj = np.array([0.0, 0.0, 1.0])
