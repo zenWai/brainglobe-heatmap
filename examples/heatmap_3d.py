@@ -25,7 +25,7 @@ values = dict(  # scalar values for each region
 
 scene = bgh.Heatmap(
     values,
-    position=(8000, 5000, 5000),
+    position=(7000, 5000, 5000),
     orientation="frontal",  # or 'sagittal', or 'horizontal' or a tuple (x,y,z)
     thickness=1000,
     title="frontal",

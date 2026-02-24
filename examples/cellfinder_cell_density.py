@@ -65,7 +65,7 @@ print(cells_summary[["volume_mm3", "cells_per_mm3"]])
 f = bgh.Heatmap(
     cells_summary["cells_per_mm3"].to_dict(),
     position=(
-        8000,
+        8200,
         5000,
         5000,
     ),
