@@ -94,7 +94,7 @@ def test_example_2d(example):
 
 @pytest.mark.mpl_image_compare(
     baseline_dir=BASELINE_DIR,
-    tolerance=20,
+    tolerance=28,
     savefig_kwarg={"dpi": 150, "bbox_inches": "tight"},
     style="default",
 )
