@@ -39,6 +39,7 @@ EXAMPLES_3D = [
     "heatmap_3d.py",
     "region_annotation_custom.py",
     "plan.py",
+    "heatmap_3d_new_example.py",
 ]
 
 EXAMPLES_NONVISUAL = [
@@ -49,6 +50,7 @@ SCENE_VARIABLE_NAME = {
     "heatmap_3d.py": "scene",
     "region_annotation_custom.py": "f",
     "plan.py": "planner",
+    "heatmap_3d_new_example.py": "scene",
 }
 
 
