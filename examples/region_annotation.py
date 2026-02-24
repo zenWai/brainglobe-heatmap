@@ -26,7 +26,7 @@ values = dict(  # scalar values for each region
 f = bgh.Heatmap(
     values,
     # when using a named orientation, you can pass a single value!
-    position=3000,
+    position=9000,
     # 'frontal' or 'sagittal,' or 'horizontal' or a tuple (x,y,z)
     orientation="frontal",
     title="2D Frontal View with Annotations",
