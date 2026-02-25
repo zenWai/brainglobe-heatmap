@@ -2,7 +2,6 @@
 
 import runpy
 from pathlib import Path
-from unittest.mock import patch
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -21,7 +20,7 @@ NOT_TESTED = [
     "heatmap_zebrafish.py",  # non-default atlas
 ]
 
-EXAMPLES_2D = [
+EXAMPLE = [
     "heatmap_2d.py",
     "heatmap_2d_subplots.py",
     "slicer_2D.py",
@@ -29,9 +28,7 @@ EXAMPLES_2D = [
     "region_annotation_specified.py",
     "cellfinder_cell_density.py",
     "get_coordinates.py",
-]
-
-EXAMPLES_3D = [
+    # 3D
     "heatmap_3d.py",
     "region_annotation_custom.py",
     "plan.py",
@@ -40,34 +37,15 @@ EXAMPLES_3D = [
 
 @pytest.mark.parametrize(
     "example",
-    EXAMPLES_2D,
-    ids=EXAMPLES_2D,
+    EXAMPLE,
 )
-def test_example_2d(example):
-    """Run a 2D example and confirm it does not crash."""
-    script = EXAMPLES_DIR / example
-    assert script.exists(), f"Example not found: {script}"
-
+def test_examples(example):
+    """confirms that examples don't crash."""
     plt.close("all")
     try:
-        with patch.object(plt, "show"):
-            runpy.run_path(str(script))
+        script = EXAMPLES_DIR / example
+        assert script.exists(), f"Example not found: {script}"
+
+        runpy.run_path(str(script))
     finally:
         plt.close("all")
-
-
-# @pytest.mark.skipif(
-#     sys.platform != "linux" or not os.environ.get("DISPLAY"),
-#     reason="3D tests need xvfb (Linux only)",
-# )
-@pytest.mark.parametrize(
-    "example",
-    EXAMPLES_3D,
-    ids=EXAMPLES_3D,
-)
-def test_example_3d(example):
-    """Run a 3D example and confirm it does not crash."""
-    script = EXAMPLES_DIR / example
-    assert script.exists(), f"Example not found: {script}"
-
-    runpy.run_path(str(script))
