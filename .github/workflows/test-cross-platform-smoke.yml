@@ -1,6 +1,12 @@
 name: Cross-Platform Smoke Tests
 
 on:
+  push:
+    branches:
+      - '*'
+    tags:
+      - '*'
+  pull_request:
   workflow_dispatch:
 
 jobs:
