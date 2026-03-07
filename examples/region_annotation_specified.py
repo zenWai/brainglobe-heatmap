@@ -41,4 +41,5 @@ f = bgh.Heatmap(
         alpha=1,  # float in range 0-1
     ),
     format="2D",  # 3D or 2D
-).show()
+    atlas_name="allen_mouse_10um",
+).show(filename="region_annotation_specified.png")

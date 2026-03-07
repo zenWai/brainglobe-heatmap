@@ -33,4 +33,6 @@ f = bgh.Heatmap(
     vmin=-5,
     vmax=3,
     format="2D",
-).show()
+    atlas_name="allen_mouse_10um",
+    use_s3_atlas=False,
+).show(filename="heatmap_2d.png")

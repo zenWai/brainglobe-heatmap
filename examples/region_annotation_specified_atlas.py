@@ -1,6 +1,6 @@
 """
 This example shows how to generate a heatmap
-in 2D with annotations on brain regions
+in 2D with annotations on specified brain regions
 """
 
 import brainglobe_heatmap as bgh
@@ -29,10 +29,10 @@ f = bgh.Heatmap(
     position=9000,
     # 'frontal' or 'sagittal,' or 'horizontal' or a tuple (x,y,z)
     orientation="frontal",
-    title="2D Frontal View with Annotations",
+    title="2D Frontal View with Annotations on Specified Brain Regions",
     vmin=-5,
     vmax=3,
-    annotate_regions=True,
+    annotate_regions=["VIS", "RSP", "HIP"],
     annotate_text_options_2d=dict(
         fontweight="normal",
         fontsize=10,
@@ -40,6 +40,7 @@ f = bgh.Heatmap(
         color="black",
         alpha=1,  # float in range 0-1
     ),
-    format="2D",  # 3D or 2D
+    format="2D",  # 2D only
     atlas_name="allen_mouse_10um",
-).show(filename="region_annotation.png")
+    use_s3_atlas=True,
+).show(filename="region_annotation_specified_atlas.png")

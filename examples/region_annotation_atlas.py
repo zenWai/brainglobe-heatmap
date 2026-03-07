@@ -40,6 +40,7 @@ f = bgh.Heatmap(
         color="black",
         alpha=1,  # float in range 0-1
     ),
-    format="2D",  # 3D or 2D
+    format="2D",  # 2D only
     atlas_name="allen_mouse_10um",
-).show(filename="region_annotation.png")
+    use_s3_atlas=True,
+).show(filename="region_annotation_atlas.png")
