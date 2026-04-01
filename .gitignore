@@ -81,3 +81,7 @@ venv/
 
 # written by setuptools_scm
 **/_version.py
+
+# Visual regression test outputs
+test_example_outputs/
+mpl-results/
